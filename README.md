@@ -1,144 +1,99 @@
-# TokenGenerator
-A Token Generator with Metastability using queue management System
-# 🏷️ Token Queue System — FPGA / Digital Design
+# Token Queue System with Metastability Handling
 
-A hardware-based customer token queue system implemented in Verilog. Customers press a button to receive a numbered token; a teller presses another button to serve the next customer in line. Two seven-segment displays show the **current** token being served and the **next** token in queue.
+A digital token queue management system implemented in Verilog, featuring FIFO-based queue control, 2-FF metastability synchronization, and 7-segment display output.
 
 ---
 
-## 📐 System Architecture
+## Overview
+
+This project implements a hardware token generator and queue controller — the kind of system used in banks, hospitals, and service counters to manage numbered tokens. Tokens are issued on request, queued in a FIFO buffer, and the current serving token is displayed on a 7-segment display.
+
+The design handles the real-world challenge of **metastability** that arises when asynchronous button inputs cross clock domains, resolved using a 2-flip-flop synchronizer chain.
+
+---
+
+## Architecture
 
 ```
-btn_get_token  ──►  token_generator  ──►  fifo_queue  ──►  seven_seg_driver  ──►  seg_next_token
-                                              │
-btn_next_customer  ─────────────────────────►│
-                                              │
-                                              └──►  current_token_reg  ──►  seven_seg_driver  ──►  seg_current_token
+ Button Input
+     │
+     ▼
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  2-FF Sync  │────▶│ FIFO Queue  │────▶│  7-Seg      │
+│ (Metastab.) │     │ Controller  │     │  Display    │
+└─────────────┘     └─────────────┘     └─────────────┘
+                          │
+                    ┌─────┴─────┐
+                    │  Token    │
+                    │ Generator │
+                    └───────────┘
 ```
 
----
-
-## 📁 Module Overview
-
-### 1. `fifo_queue.v`
-A synchronous FIFO queue with parameterizable width and depth.
-
-| Parameter    | Default | Description                        |
-|--------------|---------|------------------------------------|
-| `DATA_WIDTH` | 4       | Bit-width of each stored word      |
-| `DEPTH`      | 8       | Number of entries the FIFO can hold |
-| `PTR_WIDTH`  | 3       | Address bits (2³ = 8 entries)      |
-
-**Key design detail:** Uses the classic **extra MSB pointer trick** to distinguish full vs. empty — same low-order address bits but differing MSB means full; identical full pointer means empty.
+**Modules:**
+| Module | Description |
+|---|---|
+| `token_generator` | Issues sequential token numbers on request |
+| `fifo_queue` | Stores pending tokens in a circular FIFO buffer |
+| `sync_2ff` | 2-flip-flop synchronizer for async button inputs |
+| `seg7_display` | Drives 7-segment display with current token number |
+| `top` | Top-level integration module |
 
 ---
 
-### 2. `token_generator.v`
-Generates a new 4-bit token number each time the customer button is pressed.
+## Key Concepts
 
-- Includes a **2-flop synchronizer** to prevent metastability
-- Detects rising edge of button to produce a **single-cycle pulse**
-- Token counter runs from `1` to `15`, wrapping back to `1`
-- Outputs `new_token_valid` (1-cycle high) and `new_token_value`
+### FIFO Queue
+- Circular buffer design with separate read/write pointers
+- Full/empty status flags to prevent overflow and underflow
+- Parameterizable depth
 
----
+### Metastability Handling
+Asynchronous button presses (issue token / serve next) are synchronized into the system clock domain using a **2-flip-flop synchronizer**, preventing setup/hold violations from propagating into the queue logic.
 
-### 3. `seven_seg_driver.v`
-Combinational 4-bit to 7-segment decoder.
+```
+Async Input ──▶ [DFF1] ──▶ [DFF2] ──▶ Stable Synchronized Signal
+                  clk         clk
+```
 
-- Supports hex digits `0–F`
-- **Active-low** encoding in `gfedcba` bit order
-- `default` case turns all segments off
-
----
-
-### 4. `queue_system_top.v`
-Top-level glue module wiring all submodules together.
-
-- Debounces the **teller button** (same 2-flop + edge-detect pattern)
-- Controls FIFO write/read enables with guard conditions:
-  - Write only when `new_token_valid && !fifo_full`
-  - Read only when `btn_next_pulse && !fifo_empty`
-- Latches `fifo_dout` into `current_token_reg` on each read
-- Drives both seven-segment displays:
-  - `seg_current_token` — token currently being served
-  - `seg_next_token` — next token at head of queue (shows `0` if empty)
+### 7-Segment Display
+The currently-served token number is decoded and driven onto a 7-segment display, supporting values 0–99.
 
 ---
 
-## 🔌 Top-Level Port Map
+## Simulation
 
-| Port                | Direction | Width | Description                        |
-|---------------------|-----------|-------|------------------------------------|
-| `clk`               | Input     | 1     | System clock                       |
-| `rst_n`             | Input     | 1     | Active-low asynchronous reset      |
-| `btn_get_token`     | Input     | 1     | Customer button (get a token)      |
-| `btn_next_customer` | Input     | 1     | Teller button (serve next)         |
-| `seg_current_token` | Output    | 7     | 7-segment: "Now Serving"           |
-| `seg_next_token`    | Output    | 7     | 7-segment: "Next in Queue"         |
+Verified using ModelSim / iVerilog. The testbench covers:
+- Token issuance sequence
+- Queue full condition (overflow prevention)
+- Queue empty condition (underflow prevention)
+- Metastability synchronizer timing
 
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-- Verilog simulator: [ModelSim](https://www.intel.com/content/www/us/en/software/programmable/quartus-prime/model-sim.html), [Icarus Verilog](http://iverilog.icarus.com/), or [Verilator](https://www.veripool.org/verilator/)
-- (Optional) FPGA toolchain: Xilinx Vivado or Intel Quartus
-
-### Simulate with Icarus Verilog
+**To simulate:**
 ```bash
-# Compile all modules
-iverilog -o queue_sim \
-  fifo_queue.v \
-  token_generator.v \
-  seven_seg_driver.v \
-  queue_system_top.v \
-  tb_queue_system_top.v
-
-# Run simulation
-vvp queue_sim
-
-# View waveforms (requires GTKWave)
-gtkwave dump.vcd
+iverilog -o token_sim top.v token_generator.v fifo_queue.v sync_2ff.v seg7_display.v tb_top.v
+vvp token_sim
 ```
 
-### Synthesize for FPGA
-1. Add all `.v` files to your Quartus / Vivado project
-2. Set `queue_system_top` as the **top-level entity**
-3. Assign pins:
-   - `clk` → oscillator pin
-   - `rst_n` → push-button (active low)
-   - `btn_get_token` → push-button
-   - `btn_next_customer` → push-button
-   - `seg_current_token[6:0]` → 7-segment display 1
-   - `seg_next_token[6:0]` → 7-segment display 2
-4. Run Synthesis → Implementation → Generate Bitstream → Program
+---
+
+## Tools
+
+- **Language:** Verilog (RTL)
+- **Simulation:** ModelSim / iVerilog
+- **Synthesis target:** FPGA-ready (simulation only, no board-specific constraints)
 
 ---
 
-## ⚠️ Known Limitations / Notes
+## Future Improvements
 
-- **Token drop on full queue:** If a customer presses the button while the FIFO is full, the token is silently discarded. No overflow indicator is currently implemented.
-- **Combinational read:** `dout` from the FIFO is combinational — be aware of timing if adding registered output stages.
-- **No gray-code pointers:** Pointers are binary; this design is for a single-clock-domain system only. Do not use across asynchronous clock domains without modification.
-- **Active-low display:** Confirm `seven_seg_driver` bit order matches your physical board's segment wiring.
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! To contribute:
-
-1. **Fork** this repository
-2. Create a new branch: `git checkout -b feature/your-feature-name`
-3. Commit your changes: `git commit -m "Add: description of change"`
-4. Push to your branch: `git push origin feature/your-feature-name`
-5. Open a **Pull Request** with a clear description
-
-Please ensure your Verilog follows consistent formatting and includes comments for any new modules.
+- Add UART output for logging served tokens
+- Extend display to 3-digit tokens (0–999)
+- Implement priority queue variant for VIP tokens
+- Add reset and flush controls
 
 ---
 
-## 📄 License
+## Author
 
-This project is open source. See (LICENSE) for details.
+**Narendra Setty** — ECE Student | VLSI & Digital Design  
+[LinkedIn](https://www.linkedin.com/in/narendrasetty-vlsi) · [GitHub](https://github.com/Narendra-setty)
